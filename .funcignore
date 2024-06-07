@@ -1,0 +1,15 @@
+.git*
+.vscode
+__azurite_db*__.json
+__blobstorage__
+__queuestorage__
+local.settings.json
+test
+.venv
+__pycache__/
+parkruns_files/
+runner_files/
+.env
+log.csv
+create_encrypted_users/
+users.json.enc

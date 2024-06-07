@@ -5,11 +5,22 @@ from bs4 import BeautifulSoup
 import json
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
+from azure.identity import DefaultAzureCredential
+from azure.storage.blob import BlobServiceClient
+from io import BytesIO
 import pytz
+from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
+import logging
 
-# Define the path to the .env file
-dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
-load_dotenv(dotenv_path)
+def get_blob_service_client(credential):
+    return BlobServiceClient(account_url=os.getenv("AZURE_STORAGE_ACCOUNT_URL"), credential=credential)
+
+def download_blob_content(blob_client):
+    blob_content = blob_client.download_blob().readall()
+    return blob_content.decode('utf-8').splitlines()
+
+def upload_blob_content(blob_client, content):
+    blob_client.upload_blob("\n".join(content), overwrite=True)
 
 def get_current_time():
     spoof_time = os.getenv('SPOOF_TIME')
@@ -37,26 +48,41 @@ def is_time_to_run(config):
     
     return False
 
-def has_completed_today(log_file, runner_id):
-    if not os.path.exists(log_file):
+def has_completed_today(credential, runner_id):
+    blob_service_client = get_blob_service_client(credential)
+    blob_client = blob_service_client.get_blob_client(container=os.getenv("CONTAINER"), blob='logs.csv')
+
+    try:
+        logs = download_blob_content(blob_client)
+    except Exception as e:
         return False
 
-    with open(log_file, 'r') as file:
-        logs = file.readlines()
-    
     today_date = get_current_time().strftime('%Y-%m-%d')
-    
+
     for log in logs:
         log_date, log_runner_id = log.strip().split(',')
         if log_date.startswith(today_date) and log_runner_id == runner_id:
             return True
-    
+
     return False
 
-def log_completion(log_file, runner_id):
-    with open(log_file, 'a') as file:
-        log_date = get_current_time().strftime('%Y-%m-%d %H:%M:%S')
-        file.write(f"{log_date},{runner_id}\n")
+def log_completion(credential, runner_id):
+    blob_service_client = get_blob_service_client(credential)
+    blob_client = blob_service_client.get_blob_client(container=os.getenv("CONTAINER"), blob='logs.csv')
+
+    try:
+        logs = download_blob_content(blob_client)
+    except Exception as e:
+        logs = []
+
+    log_date = get_current_time().strftime('%Y-%m-%d %H:%M:%S')
+    logs.append(f"{log_date},{runner_id}")
+
+    # Ensure the list size is no more than 2000 lines
+    if len(logs) > 2000:
+        logs = logs[-2000:]
+
+    upload_blob_content(blob_client, logs)
 
 def fetch_webpage(url, retries=3, delay=5):
     headers = {
@@ -65,31 +91,66 @@ def fetch_webpage(url, retries=3, delay=5):
     try:
         response = requests.get(url, headers=headers)
         response.raise_for_status()  # Raise an HTTPError for bad responses
+        logging.info(response.status_code)
         return response.text
     except requests.exceptions.HTTPError as http_err:
-        print(f"HTTP error occurred: {http_err}")
+        logging.info(f"HTTP error occurred: {http_err}")
         if retries > 0 and response.status_code == 403:
-            print(f"Retrying in {delay} seconds...")
+            logging.info(f"Retrying in {delay} seconds...")
             t.sleep(delay)
             return fetch_webpage(url, retries - 1, delay)
         else:
             raise
     except Exception as err:
-        print(f"Other error occurred: {err}")
+        logging.info(f"Other error occurred: {err}")
         raise
 
-def store_page(html_content, file_path):
-    # Store the raw HTML content into a file
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    with open(file_path, 'w', encoding='utf-8') as file:
-        file.write(html_content)
+def store_page(credential, html_content, file_name):
+    blob_service_client = BlobServiceClient(account_url=os.getenv('AZURE_STORAGE_ACCOUNT_URL'), credential=credential)
+    container_client = blob_service_client.get_container_client(os.getenv('CONTAINER'))
 
-def parse_html_file(file_path):
-    # Load HTML content from the file
-    with open(file_path, 'r', encoding='utf-8') as file:
-        html_content = file.read()
-    soup = BeautifulSoup(html_content, 'html.parser')
-    return soup
+    try:
+        blob_client = container_client.get_blob_client(file_name)
+        blob_client.upload_blob(html_content, overwrite=True)
+        logging.info(f"Stored page content to blob {file_name}")
+    except Exception as e:
+        logging.info(f"Error storing page content to blob: {e}")
+
+def fetch_and_store_parkrun_results(credential, recent_parkrun_link, runner_id):
+    parts = recent_parkrun_link.strip('/').split('/')
+    location = parts[-3]
+    number = parts[-1]
+
+    file_name = f'parkruns_{location}_{number}.html'
+
+    # Check if the file already exists in blob storage
+    blob_service_client = BlobServiceClient(account_url=os.getenv('AZURE_STORAGE_ACCOUNT_URL'), credential=credential)
+    container_client = blob_service_client.get_container_client(os.getenv('CONTAINER'))
+    blob_client = container_client.get_blob_client(file_name)
+
+    try:
+        blob_client.get_blob_properties()
+        logging.info(f"File {file_name} already exists in blob storage.")
+    except ResourceNotFoundError:
+        # Fetch the recent parkrun results page
+        recent_html_content = fetch_webpage(recent_parkrun_link)
+        # Store the HTML content in Azure Blob Storage
+        store_page(credential, recent_html_content, file_name)
+
+    return file_name  # Return the blob name instead of the path
+
+def parse_html_file(credential, file_name):
+    blob_service_client = BlobServiceClient(account_url=os.getenv('AZURE_STORAGE_ACCOUNT_URL'), credential=credential)
+    container_client = blob_service_client.get_container_client(os.getenv('CONTAINER'))
+    blob_client = container_client.get_blob_client(file_name)
+
+    try:
+        html_content = blob_client.download_blob().readall()
+        soup = BeautifulSoup(html_content, 'html.parser')
+        return soup
+    except Exception as e:
+        logging.info(f"Error reading HTML content from blob: {e}")
+        return None
 
 def extract_runner_stats(soup):
     # Extract total parkruns
@@ -149,30 +210,10 @@ def extract_runner_stats(soup):
         'gender': gender
     }
 
-def fetch_and_store_parkrun_results(recent_parkrun_link, runner_id):
-    # Extract location and number from URL
-    parts = recent_parkrun_link.strip('/').split('/')
-    location = parts[-3]
-    number = parts[-1]
-    
-    # Define the path for the cached parkrun file
-    parkrun_dir = "parkruns_files"
-    file_name = f'parkruns_{location}_{number}.html'
-    file_path = os.path.join(parkrun_dir, file_name)
-    
-    if not os.path.exists(file_path):
-        # Fetch the recent parkrun results page
-        recent_html_content = fetch_webpage(recent_parkrun_link)
-        
-        # Store the HTML content in a file named `parkruns_{location}_{number}.html`
-        store_page(recent_html_content, file_path)
-    
-    return file_path
+def extract_parkrun_stats(credential, file_name, runner_id):
+    # Use parse_html_file to load the HTML content from blob storage
+    soup = parse_html_file(credential, file_name)
 
-def extract_parkrun_stats(file_path, runner_id):
-    soup = parse_html_file(file_path)
-
-    # Extract JavaScript variable containing parkrun results data
     script_tag = soup.find('script', string=lambda string: string and 'var parkrunResultsData' in string)
     if not script_tag:
         return {
@@ -183,25 +224,20 @@ def extract_parkrun_stats(file_path, runner_id):
         }
 
     script_content = script_tag.string
-
-    # Extract JSON object from the JavaScript variable
     json_str = script_content.split('var parkrunResultsData = ', 1)[1].rsplit(';', 1)[0]
     parkrun_results_data = json.loads(json_str)
 
-    # Extracting total runners, male runners, and female runners count
     gender_counts = parkrun_results_data.get('genderCounts', {})
     male_runners = gender_counts.get('Male', 0)
     female_runners = gender_counts.get('Female', 0)
     
-    # Calculate total runners by looking at the position of the last placed runner
     total_runners = 0
-    last_runner_tag = soup.find_all('tr', {'class': 'Results-table-row'})[-1]  # Assume the last row represents the last runner
+    last_runner_tag = soup.find_all('tr', {'class': 'Results-table-row'})[-1]
     if last_runner_tag:
         last_position = last_runner_tag.find('td', {'class': 'Results-table-td--position'})
         if last_position:
             total_runners = last_position.text.strip()
 
-    # Check if the current runner has a PB
     runner_tag = soup.find('tr', {'data-achievement': "New PB!", 'data-name': True})
     is_pb = False
     if runner_tag:
@@ -216,45 +252,34 @@ def extract_parkrun_stats(file_path, runner_id):
         'is_pb': is_pb
     }
 
-def get_title_and_description(runner_id):
-    # URL to scrape
+def get_title_and_description(credential, runner_id):
     url = f"https://www.parkrun.org.uk/parkrunner/{runner_id}/"
-    # Directories for different types of files
-    runner_dir = os.path.join(os.path.dirname(__file__), 'runner_files')
-    log_file = os.path.join(os.path.dirname(__file__), 'log.csv')
 
-    # Loading configuration
     config = load_configuration()
 
-    # Checking if it is time to run
     if not is_time_to_run(config):
-        print("Not within the allowed time frame.")
+        logging.info("Not within the allowed time frame.")
         return None, None
 
-    # Checking if the process has already completed today
-    if has_completed_today(log_file, runner_id):
-        print(f"Processing already completed for runner ID: {runner_id} today.")
+    if has_completed_today(credential, runner_id):
+        logging.info(f"Processing already completed for runner ID: {runner_id} today.")
         return None, None
     
-    runner_file_path = os.path.join(runner_dir, f'runner_{runner_id}.html')
-    
-    # Fetch runner profile and store it
+    file_name = f'runner_{runner_id}.html'
+    # Fetch runner profile and store it in Azure Blob Storage
     html_content = fetch_webpage(url)
-    store_page(html_content, runner_file_path)
+    store_page(credential, html_content, file_name)
     
-    soup = parse_html_file(runner_file_path)
+    soup = parse_html_file(credential, file_name)
     data = extract_runner_stats(soup)
 
-    # Parse the most recent parkrun date
     recent_parkrun_date = datetime.strptime(data['recent_parkrun_date'], '%d/%m/%Y').date() if data['recent_parkrun_date'] else None
     
-    # Check if the recent parkrun is today's date
     if recent_parkrun_date == get_current_time().date():
         if data['recent_parkrun_link']:
-            file_path = fetch_and_store_parkrun_results(data['recent_parkrun_link'], runner_id)
-            parkrun_stats = extract_parkrun_stats(file_path, runner_id)
+            file_name = fetch_and_store_parkrun_results(credential, data['recent_parkrun_link'], runner_id)
+            parkrun_stats = extract_parkrun_stats(credential, file_name, runner_id)
 
-            # Create title and description
             title = f"Parkrun #{data['total_parkruns']} ({data['recent_parkrun_location']})"
             
             description = f"""🕒 Official time: {data['time']}
@@ -266,11 +291,10 @@ def get_title_and_description(runner_id):
             if parkrun_stats['is_pb']:
                 description = f"🕒 Official time: {data['time']} | Course PB 🚨\n" + description
 
-            # Log the successful completion
-            log_completion(log_file, runner_id)
+            log_completion(credential, runner_id)
 
             return title, description
 
     else:
-        print("The most recent parkrun did not occur today. Skipping additional data fetch.")
+        logging.info("The most recent parkrun did not occur today. Skipping additional data fetch.")
         return None, None

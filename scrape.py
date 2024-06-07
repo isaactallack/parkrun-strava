@@ -216,8 +216,7 @@ def extract_parkrun_stats(file_path, runner_id):
         'is_pb': is_pb
     }
 
-def get_title_and_description():
-    runner_id = os.getenv('RUNNER_ID')
+def get_title_and_description(runner_id):
     # URL to scrape
     url = f"https://www.parkrun.org.uk/parkrunner/{runner_id}/"
     # Directories for different types of files

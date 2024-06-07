@@ -1,7 +1,6 @@
 import os
 import requests
 import time
-from dotenv import load_dotenv, set_key
 from datetime import datetime, timezone, timedelta
 import pytz
 
@@ -13,20 +12,7 @@ def get_current_time():
     else:
         return datetime.now(pytz.timezone('Europe/London'))
 
-# Define the path to the .env file
-dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
-load_dotenv(dotenv_path)
-
-# Fetch essential details from environment
-client_id = os.getenv('STRAVA_CLIENT_ID')
-client_secret = os.getenv('STRAVA_CLIENT_SECRET')
-access_token = os.getenv('STRAVA_ACCESS_TOKEN')
-refresh_token = os.getenv('STRAVA_REFRESH_TOKEN')
-expires_at = os.getenv('STRAVA_EXPIRES_AT')
-
-def refresh_access_token():
-    global access_token, refresh_token, expires_at
-
+def refresh_access_token(client_id, client_secret, refresh_token):
     response = requests.post(
         'https://www.strava.com/oauth/token',
         data={
@@ -43,27 +29,19 @@ def refresh_access_token():
         refresh_token = tokens['refresh_token']
         expires_at = tokens['expires_at']
 
-        # Update .env file
-        set_key(dotenv_path, 'STRAVA_ACCESS_TOKEN', access_token)
-        set_key(dotenv_path, 'STRAVA_REFRESH_TOKEN', refresh_token)
-        set_key(dotenv_path, 'STRAVA_EXPIRES_AT', str(expires_at))
-
         print('Access token refreshed successfully.')
+        return access_token, refresh_token, str(expires_at)
     else:
         print('Failed to refresh access token.')
 
-def ensure_valid_token():
-    global access_token, refresh_token, expires_at
-
+def ensure_valid_token(client_id, client_secret, access_token, refresh_token, expires_at):
     current_time = int(time.time())
     if not expires_at or current_time >= int(expires_at):
         print('Token expired or not present. Refreshing...')
-        refresh_access_token()
+        access_token, refresh_token, expires_at = refresh_access_token(client_id, client_secret, refresh_token)
+    return access_token, refresh_token, expires_at
 
-# Ensure that the token is valid before making API calls
-ensure_valid_token()
-
-def get_activities():
+def get_activities(access_token):
     gmt = pytz.timezone('Europe/London')
     
     start_time_gmt = get_current_time()
@@ -100,7 +78,7 @@ def get_activities():
 
     return filtered_activities
 
-def get_activity(activity_id):
+def get_activity(access_token, activity_id):
     headers = {'Authorization': f'Bearer {access_token}'}
     
     response = requests.get(f'https://www.strava.com/api/v3/activities/{activity_id}', headers=headers)
@@ -113,7 +91,7 @@ def get_activity(activity_id):
 
     return activity
 
-def update_activity(activity_id, new_title, new_description):
+def update_activity(access_token, activity_id, new_title, new_description):
     url = f"https://www.strava.com/api/v3/activities/{activity_id}"
     headers = {"Authorization": f"Bearer {access_token}"}
     data = {

@@ -2,6 +2,21 @@ import strava
 import scrape
 import time
 import os
+import json
+from dotenv import load_dotenv
+
+# Define the path to the .env file
+dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(dotenv_path)
+
+def load_users(config_file='users.json'):
+    with open(os.path.join(os.path.dirname(__file__), config_file), 'r') as file:
+        config = json.load(file)
+    return config
+
+def save_users(config, config_file='users.json'):
+    with open(os.path.join(os.path.dirname(__file__), config_file), 'w') as file:
+        json.dump(config, file, indent=4)
 
 def clean_up_old_files(directories, days=7):
     """
@@ -28,20 +43,41 @@ def clean_up_old_files(directories, days=7):
 directories_to_clean = ['parkruns_files', 'runner_files']
 clean_up_old_files(directories_to_clean)
 
-title, description = scrape.get_title_and_description()
+users = load_users()
 
-if title:
-    activities = strava.get_activities()
+for account in users['accounts']:
+    runner_id = account['RUNNER_ID']
+    access_token = account['STRAVA_ACCESS_TOKEN']
+    refresh_token = account['STRAVA_REFRESH_TOKEN']
+    client_id = account['STRAVA_CLIENT_ID']
+    client_secret = account['STRAVA_CLIENT_SECRET']
+    expires_at = account['STRAVA_EXPIRES_AT']
 
-    if len(activities) == 1:
-        activity_id = activities[0]['id']
-        activity_description = strava.get_activity(activity_id)['description']
+    title, description = scrape.get_title_and_description(runner_id)
 
-        if activity_description:
-            new_description = f"""{activity_description}
+    if title:
+        # Ensure that the token is valid before making API calls
+        access_token, refresh_token, expires_at = strava.ensure_valid_token(client_id, client_secret, access_token, refresh_token, expires_at)
+
+        # Update the account with the new tokens
+        account['STRAVA_ACCESS_TOKEN'] = access_token
+        account['STRAVA_REFRESH_TOKEN'] = refresh_token
+        account['STRAVA_EXPIRES_AT'] = expires_at
+
+        activities = strava.get_activities(access_token)
+
+        if len(activities) == 1:
+            activity_id = activities[0]['id']
+            activity_description = strava.get_activity(access_token, activity_id)['description']
+
+            if activity_description:
+                new_description = f"""{activity_description}
 
 {description}"""
-        else:
-            new_description = description
+            else:
+                new_description = description
 
-        strava.update_activity(activity_id, title, new_description)
+            strava.update_activity(access_token, activity_id, title, new_description)
+
+# Save updated tokens
+save_users(users)

@@ -1,0 +1,5 @@
+__pycache__/
+parkruns_files/
+runner_files/
+.env
+log.csv

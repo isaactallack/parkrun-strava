@@ -29,7 +29,6 @@ directories_to_clean = ['parkruns_files', 'runner_files']
 clean_up_old_files(directories_to_clean)
 
 title, description = scrape.get_title_and_description()
-print(title, description)
 
 if title:
     activities = strava.get_activities()

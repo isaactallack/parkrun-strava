@@ -120,8 +120,8 @@ def extract_runner_stats(soup):
                 recent_parkrun_date = recent_parkrun_date_tag.text
                 recent_parkrun_link = recent_parkrun_date_tag['href']
 
-            total_position = cells[2].text
-            gender_position = cells[3].text
+            gender_position = cells[2].text
+            total_position = cells[3].text
             time = cells[4].text
             age_grade_score = cells[5].text
 
@@ -156,7 +156,7 @@ def fetch_and_store_parkrun_results(recent_parkrun_link, runner_id):
     number = parts[-1]
     
     # Define the path for the cached parkrun file
-    parkrun_dir = "parkruns_files"
+    parkrun_dir = os.path.join(os.path.dirname(__file__), 'parkruns_files')
     file_name = f'parkruns_{location}_{number}.html'
     file_path = os.path.join(parkrun_dir, file_name)
     
@@ -201,18 +201,43 @@ def extract_parkrun_stats(file_path, runner_id):
         if last_position:
             total_runners = last_position.text.strip()
 
-    # Check if the current runner has a PB
-    runner_tag = soup.find('tr', {'data-achievement': "New PB!", 'data-name': True})
-    is_pb = False
-    if runner_tag:
-        href = runner_tag.find('a', href=True)['href']
-        if f"/parkrunner/{runner_id}" in href:
-            is_pb = True
+    # Find all rows
+    runner_tags = soup.find_all('tr', {'data-name': True})
+
+    position = None
+    gender_position = None
+
+    # Iterate over all runner tags
+    for runner_tag in runner_tags:
+        href_tag = runner_tag.find('a', href=True)
+        if href_tag:
+            href = href_tag['href']
+            if f"/parkrunner/{runner_id}" in href:
+                # Extract the position and gender position
+                position = runner_tag['data-position']
+                
+                # Find the gender position within the nested structure
+                detailed_div = runner_tag.find('div', class_='detailed')
+                if detailed_div:
+                    # Extract gender position by looking for matching structure
+                    gender_span = detailed_div.find('span', class_='Results-table--M')
+                    if gender_span:
+                        gender_position_text = gender_span.next_sibling.strip()
+                        if gender_position_text.isdigit():
+                            gender_position = int(gender_position_text)
+                
+                # Check if the runner has a New PB!
+                if runner_tag.get('data-achievement') == "New PB!":
+                    is_pb = True
+                
+                break
 
     return {
         'total_runners': total_runners,
         'male_runners': male_runners,
         'female_runners': female_runners,
+        'position': position,
+        'gender_position': gender_position,
         'is_pb': is_pb
     }
 
@@ -239,8 +264,8 @@ def get_title_and_description(runner_id):
     runner_file_path = os.path.join(runner_dir, f'runner_{runner_id}.html')
     
     # Fetch runner profile and store it
-    html_content = fetch_webpage(url)
-    store_page(html_content, runner_file_path)
+    #html_content = fetch_webpage(url)
+    #store_page(html_content, runner_file_path)
     
     soup = parse_html_file(runner_file_path)
     data = extract_runner_stats(soup)
@@ -258,13 +283,13 @@ def get_title_and_description(runner_id):
             title = f"Parkrun #{data['total_parkruns']} ({data['recent_parkrun_location']})"
             
             description = f"""🕒 Official time: {data['time']}
-🏁 Overall position: {data['total_position']}/{parkrun_stats['total_runners']}
-🚹 Gender position: {data['gender_position']}/{parkrun_stats['male_runners'] if data['gender'] == 'Male' else parkrun_stats['female_runners']}
+🏁 Overall position: {parkrun_stats['position']}/{parkrun_stats['total_runners']}
+🚹 Gender position: {parkrun_stats['gender_position']}/{parkrun_stats['male_runners'] if data['gender'] == 'Male' else parkrun_stats['female_runners']}
 🎯 Age grade: {data['age_grade_score']}
 🍓 Automated statistics powered by Isaac's RPi"""
-            
+
             if parkrun_stats['is_pb']:
-                description = f"🕒 Official time: {data['time']} | Course PB 🚨\n" + description
+                description = description.replace(f"🕒 Official time: {data['time']}", f"🕒 Official time: {data['time']} | Course PB 🚨")
 
             # Log the successful completion
             log_completion(log_file, runner_id)

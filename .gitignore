@@ -4,3 +4,10 @@ runner_files/
 .env
 log.csv
 users.json
+.venv/
+.vscode/
+__azurite_db_queue__.json
+__azurite_db_table__.json
+create_encrypted_users/
+local.settings.json
+users.json.enc

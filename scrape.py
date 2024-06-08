@@ -264,8 +264,8 @@ def get_title_and_description(runner_id):
     runner_file_path = os.path.join(runner_dir, f'runner_{runner_id}.html')
     
     # Fetch runner profile and store it
-    #html_content = fetch_webpage(url)
-    #store_page(html_content, runner_file_path)
+    html_content = fetch_webpage(url)
+    store_page(html_content, runner_file_path)
     
     soup = parse_html_file(runner_file_path)
     data = extract_runner_stats(soup)

@@ -11,6 +11,8 @@ from io import BytesIO
 import pytz
 from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 import logging
+import random
+import time
 
 def get_blob_service_client(credential):
     return BlobServiceClient(account_url=os.getenv("AZURE_STORAGE_ACCOUNT_URL"), credential=credential)
@@ -85,19 +87,30 @@ def log_completion(credential, runner_id):
     upload_blob_content(blob_client, logs)
 
 def fetch_webpage(url, retries=3, delay=5):
+    # Define your proxy details
+    proxy = os.getenv("PROXY_URL")
+    
+    # Configure the proxies dictionary for the requests library
+    proxies = {
+        'http': proxy,
+        'https': proxy
+    }
+    
+    # Define headers
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
+    
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, proxies=proxies, verify=False)
         response.raise_for_status()  # Raise an HTTPError for bad responses
         logging.info(response.status_code)
         return response.text
     except requests.exceptions.HTTPError as http_err:
         logging.info(f"HTTP error occurred: {http_err}")
-        if retries > 0 and response.status_code == 403:
+        if retries > 0 and response.status_code in [403, 429]:
             logging.info(f"Retrying in {delay} seconds...")
-            t.sleep(delay)
+            time.sleep(delay)
             return fetch_webpage(url, retries - 1, delay)
         else:
             raise
@@ -181,8 +194,8 @@ def extract_runner_stats(soup):
                 recent_parkrun_date = recent_parkrun_date_tag.text
                 recent_parkrun_link = recent_parkrun_date_tag['href']
 
-            total_position = cells[2].text
-            gender_position = cells[3].text
+            gender_position = cells[2].text
+            total_position = cells[3].text
             time = cells[4].text
             age_grade_score = cells[5].text
 
@@ -238,17 +251,43 @@ def extract_parkrun_stats(credential, file_name, runner_id):
         if last_position:
             total_runners = last_position.text.strip()
 
-    runner_tag = soup.find('tr', {'data-achievement': "New PB!", 'data-name': True})
-    is_pb = False
-    if runner_tag:
-        href = runner_tag.find('a', href=True)['href']
-        if f"/parkrunner/{runner_id}" in href:
-            is_pb = True
+    # Find all rows
+    runner_tags = soup.find_all('tr', {'data-name': True})
+
+    position = None
+    gender_position = None
+
+    # Iterate over all runner tags
+    for runner_tag in runner_tags:
+        href_tag = runner_tag.find('a', href=True)
+        if href_tag:
+            href = href_tag['href']
+            if f"/parkrunner/{runner_id}" in href:
+                # Extract the position and gender position
+                position = runner_tag['data-position']
+
+                # Find the gender position within the nested structure
+                detailed_div = runner_tag.find('div', class_='detailed')
+                if detailed_div:
+                    # Extract gender position by looking for matching structure
+                    gender_span = detailed_div.find('span', class_='Results-table--M')
+                    if gender_span:
+                        gender_position_text = gender_span.next_sibling.strip()
+                        if gender_position_text.isdigit():
+                            gender_position = int(gender_position_text)
+
+                # Check if the runner has a New PB!
+                if runner_tag.get('data-achievement') == "New PB!":
+                    is_pb = True
+
+                break
 
     return {
         'total_runners': total_runners,
         'male_runners': male_runners,
         'female_runners': female_runners,
+        'position': position,
+        'gender_position': gender_position,
         'is_pb': is_pb
     }
 
@@ -283,13 +322,13 @@ def get_title_and_description(credential, runner_id):
             title = f"Parkrun #{data['total_parkruns']} ({data['recent_parkrun_location']})"
             
             description = f"""🕒 Official time: {data['time']}
-🏁 Overall position: {data['total_position']}/{parkrun_stats['total_runners']}
-🚹 Gender position: {data['gender_position']}/{parkrun_stats['male_runners'] if data['gender'] == 'Male' else parkrun_stats['female_runners']}
+🏁 Overall position: {parkrun_stats['position']}/{parkrun_stats['total_runners']}
+🚹 Gender position: {parkrun_stats['gender_position']}/{parkrun_stats['male_runners'] if data['gender'] == 'Male' else parkrun_stats['female_runners']}
 🎯 Age grade: {data['age_grade_score']}
 🍓 Automated statistics powered by Isaac's RPi"""
             
             if parkrun_stats['is_pb']:
-                description = f"🕒 Official time: {data['time']} | Course PB 🚨\n" + description
+                description = description.replace(f"🕒 Official time: {data['time']}", f"🕒 Official time: {data['time']} | Course PB 🚨")
 
             log_completion(credential, runner_id)
 

@@ -11,3 +11,5 @@ __azurite_db_table__.json
 create_encrypted_users/
 local.settings.json
 users.json.enc
+cron.log
+webapp.py

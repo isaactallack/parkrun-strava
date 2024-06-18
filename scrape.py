@@ -86,34 +86,16 @@ def log_completion(credential, runner_id):
 
     upload_blob_content(blob_client, logs)
 
-def fetch_webpage(url, retries=3, delay=5):
-    # Define your proxy details
-    proxy = os.getenv("PROXY_URL")
-    
-    # Configure the proxies dictionary for the requests library
-    proxies = {
-        'http': proxy,
-        'https': proxy
-    }
-    
-    # Define headers
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
+def fetch_webpage(url):
+    api_key = os.getenv("SCRAPERAPI_KEY")
+
+    payload = {'api_key': api_key, 'url': url}
     
     try:
-        response = requests.get(url, headers=headers, proxies=proxies, verify=False)
-        response.raise_for_status()  # Raise an HTTPError for bad responses
-        logging.info(response.status_code)
-        return response.text
-    except requests.exceptions.HTTPError as http_err:
-        logging.info(f"HTTP error occurred: {http_err}")
-        if retries > 0 and response.status_code in [403, 429]:
-            logging.info(f"Retrying in {delay} seconds...")
-            time.sleep(delay)
-            return fetch_webpage(url, retries - 1, delay)
-        else:
-            raise
+        r = requests.get('https://api.scraperapi.com/', params=payload, timeout=70)
+        r.raise_for_status()  # Raise an HTTPError for bad responses
+        logging.info(r.status_code)
+        return r.text
     except Exception as err:
         logging.info(f"Other error occurred: {err}")
         raise

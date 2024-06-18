@@ -313,7 +313,7 @@ def get_title_and_description(credential, runner_id):
     if recent_parkrun_date == get_current_time().date():
         if data['recent_parkrun_link']:
             file_name = fetch_and_store_parkrun_results(credential, data['recent_parkrun_link'], runner_id)
-            parkrun_stats = extract_parkrun_stats(file_name, runner_id, data['gender'])
+            parkrun_stats = extract_parkrun_stats(credential, file_name, runner_id, data['gender'])
 
             title = f"Parkrun #{data['total_parkruns']} ({data['recent_parkrun_location']})"
             

@@ -14,3 +14,5 @@ log.csv
 create_encrypted_users/
 users.json.enc
 users.json
+cron.log
+webapp.py

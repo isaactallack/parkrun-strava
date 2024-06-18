@@ -13,6 +13,7 @@ from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 import logging
 import random
 import time
+import re
 
 def get_blob_service_client(credential):
     return BlobServiceClient(account_url=os.getenv("AZURE_STORAGE_ACCOUNT_URL"), credential=credential)
@@ -158,10 +159,6 @@ def extract_runner_stats(soup):
     recent_parkrun_date = None
     recent_parkrun_link = None
     recent_parkrun_location = None
-    total_position = None
-    gender_position = None
-    age_grade_score = None
-    time = None
 
     recent_parkrun_table = soup.find('table', {'class': 'sortable'})
     if recent_parkrun_table:
@@ -175,11 +172,6 @@ def extract_runner_stats(soup):
             if recent_parkrun_date_tag:
                 recent_parkrun_date = recent_parkrun_date_tag.text
                 recent_parkrun_link = recent_parkrun_date_tag['href']
-
-            gender_position = cells[2].text
-            total_position = cells[3].text
-            time = cells[4].text
-            age_grade_score = cells[5].text
 
     # Extract gender
     gender = None
@@ -198,14 +190,10 @@ def extract_runner_stats(soup):
         'recent_parkrun_date': recent_parkrun_date,
         'recent_parkrun_link': recent_parkrun_link,
         'recent_parkrun_location': recent_parkrun_location,
-        'total_position': total_position,
-        'gender_position': gender_position,
-        'time': time,
-        'age_grade_score': age_grade_score,
         'gender': gender
     }
 
-def extract_parkrun_stats(credential, file_name, runner_id):
+def extract_parkrun_stats(credential, file_name, runner_id, gender):
     # Use parse_html_file to load the HTML content from blob storage
     soup = parse_html_file(credential, file_name)
 
@@ -215,7 +203,11 @@ def extract_parkrun_stats(credential, file_name, runner_id):
             'total_runners': None,
             'male_runners': None,
             'female_runners': None,
-            'is_pb': False
+            'position': None,
+            'gender_position': None,
+            'is_pb': False,
+            'time': None,
+            'age_grade': None
         }
 
     script_content = script_tag.string
@@ -238,6 +230,8 @@ def extract_parkrun_stats(credential, file_name, runner_id):
 
     position = None
     gender_position = None
+    time = None
+    age_grade = None
 
     # Iterate over all runner tags
     for runner_tag in runner_tags:
@@ -245,22 +239,40 @@ def extract_parkrun_stats(credential, file_name, runner_id):
         if href_tag:
             href = href_tag['href']
             if f"/parkrunner/{runner_id}" in href:
-                # Extract the position and gender position
+                # Extract the position, time, and age grade
                 position = runner_tag['data-position']
 
+                time_td = runner_tag.find('td', class_='Results-table-td--time')
+                if time_td and time_td.div:
+                    time = time_td.div.text.strip()
+
+                age_grade_td = runner_tag.find('td', class_='Results-table-td--ageGroup')
+                if age_grade_td:
+                    detailed_div = age_grade_td.find('div', class_='detailed')
+                    if detailed_div:
+                        age_grade_text = detailed_div.text.strip()
+                        # Use regex to extract the relevant parts of the age grade
+                        match = re.search(r'[\d.]+%', age_grade_text)
+                        if match:
+                            age_grade = match.group()
+
                 # Find the gender position within the nested structure
-                detailed_div = runner_tag.find('div', class_='detailed')
-                if detailed_div:
-                    # Extract gender position by looking for matching structure
-                    gender_span = detailed_div.find('span', class_='Results-table--M')
-                    if gender_span:
-                        gender_position_text = gender_span.next_sibling.strip()
-                        if gender_position_text.isdigit():
-                            gender_position = int(gender_position_text)
+                gender_span = runner_tag.find('span', class_='Results-table--genderCount')
+                if gender_span:
+                    # Extract the next sibling text of the span
+                    parent = gender_span.parent
+                    if parent:
+                        parent_text = parent.get_text(separator=' ', strip=True)
+                        # Extract the numeric value from the parent text
+                        parts = parent_text.split()
+                        for part in parts:
+                            if part.isdigit():
+                                gender_position = int(part)
+                                break
 
                 # Check if the runner has a New PB!
-                if runner_tag.get('data-achievement') == "New PB!":
-                    is_pb = True
+                achievement = runner_tag.find('td', {'data-achievement': True})
+                is_pb = achievement and achievement['data-achievement'] == "New PB!"
 
                 break
 
@@ -270,7 +282,9 @@ def extract_parkrun_stats(credential, file_name, runner_id):
         'female_runners': female_runners,
         'position': position,
         'gender_position': gender_position,
-        'is_pb': is_pb
+        'is_pb': is_pb,
+        'time': time,
+        'age_grade_score': age_grade
     }
 
 def get_title_and_description(credential, runner_id):
@@ -299,14 +313,14 @@ def get_title_and_description(credential, runner_id):
     if recent_parkrun_date == get_current_time().date():
         if data['recent_parkrun_link']:
             file_name = fetch_and_store_parkrun_results(credential, data['recent_parkrun_link'], runner_id)
-            parkrun_stats = extract_parkrun_stats(credential, file_name, runner_id)
+            parkrun_stats = extract_parkrun_stats(file_path, runner_id, data['gender'])
 
             title = f"Parkrun #{data['total_parkruns']} ({data['recent_parkrun_location']})"
             
-            description = f"""🕒 Official time: {data['time']}
+            description = f"""🕒 Official time: {parkrun_stats['time']}
 🏁 Overall position: {parkrun_stats['position']}/{parkrun_stats['total_runners']}
 🚹 Gender position: {parkrun_stats['gender_position']}/{parkrun_stats['male_runners'] if data['gender'] == 'Male' else parkrun_stats['female_runners']}
-🎯 Age grade: {data['age_grade_score']}
+🎯 Age grade: {parkrun_stats['age_grade_score']}
 👦 Automated statistics powered by Isaac"""
             
             if parkrun_stats['is_pb']:

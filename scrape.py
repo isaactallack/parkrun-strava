@@ -321,7 +321,7 @@ def get_title_and_description(credential, runner_id):
 🏁 Overall position: {parkrun_stats['position']}/{parkrun_stats['total_runners']}
 🚹 Gender position: {parkrun_stats['gender_position']}/{parkrun_stats['male_runners'] if data['gender'] == 'Male' else parkrun_stats['female_runners']}
 🎯 Age grade: {parkrun_stats['age_grade_score']}
-👦 Automated statistics powered by Isaac"""
+🃏 Automated statistics powered by Isaac"""
             
             if parkrun_stats['is_pb']:
                 description = description.replace(f"🕒 Official time: {data['time']}", f"🕒 Official time: {data['time']} | Course PB 🚨")

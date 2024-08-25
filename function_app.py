@@ -104,6 +104,10 @@ def main():
 
     users = load_users(credential)
 
+    # Get exclusions from environment variable and create a list
+    exclusions = os.environ.get('EXCLUSIONS', '').split(',')
+    exclusions = [x.strip() for x in exclusions]  # Remove any whitespace
+
     for account in users['accounts']:
         runner_id = account['RUNNER_ID']
         access_token = account['STRAVA_ACCESS_TOKEN']
@@ -111,6 +115,11 @@ def main():
         client_id = account['STRAVA_CLIENT_ID']
         client_secret = account['STRAVA_CLIENT_SECRET']
         expires_at = account['STRAVA_EXPIRES_AT']
+
+        # Check if the runner_id is in the exclusions list
+        if runner_id in exclusions:
+            print(f"Skipping runner {runner_id} as it's in the exclusion list.")
+            continue
 
         title, description = scrape.get_title_and_description(credential, runner_id)
 

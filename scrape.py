@@ -43,10 +43,10 @@ def is_time_to_run(config):
     current_day = current_time.strftime('%Y-%m-%d')
     current_hour = current_time.hour
     
-    if current_time.weekday() == 5 and 9 <= current_hour < 17:
+    if current_time.weekday() == 5 and 9 <= current_hour < 15:
         return True
     
-    if current_day in config['additional_dates'] and 9 <= current_hour < 17:
+    if current_day in config['additional_dates'] and 9 <= current_hour < 15:
         return True
     
     return False
@@ -88,12 +88,12 @@ def log_completion(credential, runner_id):
     upload_blob_content(blob_client, logs)
 
 def fetch_webpage(url):
-    api_key = os.getenv("SCRAPERAPI_KEY")
+    api_key = os.getenv("SCRAPEDO_API_KEY")
 
-    payload = {'api_key': api_key, 'url': url}
+    url = f"http://api.scrape.do?token={api_key}&url={url}&super=True"
     
     try:
-        r = requests.get('https://api.scraperapi.com/', params=payload, timeout=70)
+        r = requests.get(url, timeout=70)
         r.raise_for_status()  # Raise an HTTPError for bad responses
         logging.info(r.status_code)
         return r.text

@@ -13,6 +13,7 @@ from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 import logging
 import random
 import time
+import pandas as pd
 import re
 
 def get_blob_service_client(credential):
@@ -193,98 +194,129 @@ def extract_runner_stats(soup):
         'gender': gender
     }
 
-def extract_parkrun_stats(credential, file_name, runner_id, gender):
-    # Use parse_html_file to load the HTML content from blob storage
-    soup = parse_html_file(credential, file_name)
+def parse_parkrun_results(soup):
+    """Convert a parkrun results page into a DataFrame."""
+    # Extract event details
+    header = soup.find('div', class_='Results-header')
+    location = header.find('h1').text.strip()
+    date = header.find('span', class_='format-date').text.strip()
+    event_number = header.find('span', text=re.compile('#')).text.strip('#')
 
-    script_tag = soup.find('script', string=lambda string: string and 'var parkrunResultsData' in string)
-    if not script_tag:
-        return {
-            'total_runners': None,
-            'male_runners': None,
-            'female_runners': None,
-            'position': None,
-            'gender_position': None,
-            'is_pb': False,
-            'time': None,
-            'age_grade': None
-        }
-
-    script_content = script_tag.string
-    json_str = script_content.split('var parkrunResultsData = ', 1)[1].rsplit(';', 1)[0]
-    parkrun_results_data = json.loads(json_str)
-
-    gender_counts = parkrun_results_data.get('genderCounts', {})
-    male_runners = gender_counts.get('Male', 0)
-    female_runners = gender_counts.get('Female', 0)
+    # Prepare data list
+    data = []
     
-    total_runners = 0
-    last_runner_tag = soup.find_all('tr', {'class': 'Results-table-row'})[-1]
-    if last_runner_tag:
-        last_position = last_runner_tag.find('td', {'class': 'Results-table-td--position'})
-        if last_position:
-            total_runners = last_position.text.strip()
+    # Extract results
+    results = soup.find_all('tr', class_='Results-table-row')
+    for row in results:
+        position = row.find('td', class_='Results-table-td--position').text.strip()
+        
+        # Check if this is an unknown runner
+        if not row.get('data-agegrade'):  # Using age grade as indicator for unknown runner
+            data.append({
+                'position': position,
+                'name': '',
+                'parkrun_id': '',
+                'gender': '',
+                'age': '',
+                'time': '',
+                'age_grade': '',
+                'club': '',
+                'is_pb': False,
+                'event_number': event_number,
+                'location': location,
+                'date': date,
+                'total_runs': ''
+            })
+            continue
 
-    # Find all rows
-    runner_tags = soup.find_all('tr', {'data-name': True})
+        name_link = row.find('a')
+        name = name_link.text.strip() if name_link else ''
+        
+        # Extract Parkrun ID from the URL
+        parkrun_id = ''
+        if name_link and 'href' in name_link.attrs:
+            id_match = re.search(r'parkrunner/(\d+)', name_link['href'])
+            parkrun_id = id_match.group(1) if id_match else ''
 
-    position = None
-    gender_position = None
-    time = None
-    age_grade = None
+        gender = row.get('data-gender', '')
+        age_group = row.get('data-agegroup', '')
+        # More defensive time extraction
+        time_cell = row.find('td', class_='Results-table-td--time')
+        time = ''
+        if time_cell and time_cell.find('div'):
+            time_div = time_cell.find('div', class_='compact')
+            if time_div:
+                time = time_div.text.strip()
+        
+        # Check for PB using the presence of Results-table-td--pb class
+        is_pb = 'Results-table-td--pb' in time_cell.get('class', []) if time_cell else False
+        
+        age_grade = row.get('data-agegrade', '')
+        club = row.get('data-club', '')
 
-    # Iterate over all runner tags
-    for runner_tag in runner_tags:
-        href_tag = runner_tag.find('a', href=True)
-        if href_tag:
-            href = href_tag['href']
-            if f"/parkrunner/{runner_id}" in href:
-                # Extract the position, time, and age grade
-                position = runner_tag['data-position']
+        # Extract age from age group
+        age = ''
+        if age_group:
+            age_match = re.search(r'\d+', age_group)
+            age = age_match.group() if age_match else ''
 
-                time_td = runner_tag.find('td', class_='Results-table-td--time')
-                if time_td and time_td.div:
-                    time = time_td.div.text.strip()
+        # Extract total runs
+        total_runs = row.get('data-runs', '')
 
-                age_grade_td = runner_tag.find('td', class_='Results-table-td--ageGroup')
-                if age_grade_td:
-                    detailed_div = age_grade_td.find('div', class_='detailed')
-                    if detailed_div:
-                        age_grade_text = detailed_div.text.strip()
-                        # Use regex to extract the relevant parts of the age grade
-                        match = re.search(r'[\d.]+%', age_grade_text)
-                        if match:
-                            age_grade = match.group()
+        data.append({
+            'position': position,
+            'name': name,
+            'parkrun_id': parkrun_id,
+            'gender': gender,
+            'age': age,
+            'time': time,
+            'age_grade': age_grade,
+            'club': club,
+            'is_pb': is_pb,
+            'event_number': event_number,
+            'location': location,
+            'date': date,
+            'total_runs': total_runs
+        })
+    
+    return pd.DataFrame(data)
 
-                # Find the gender position within the nested structure
-                gender_span = runner_tag.find('span', class_='Results-table--genderCount')
-                if gender_span:
-                    # Extract the next sibling text of the span
-                    parent = gender_span.parent
-                    if parent:
-                        parent_text = parent.get_text(separator=' ', strip=True)
-                        # Extract the numeric value from the parent text
-                        parts = parent_text.split()
-                        for part in parts:
-                            if part.isdigit():
-                                gender_position = int(part)
-                                break
-
-                # Check if the runner has a New PB!
-                achievement = runner_tag.find('td', {'data-achievement': True})
-                is_pb = achievement and achievement['data-achievement'] == "New PB!"
-
-                break
+def get_runner_stats(df, runner_id):
+    """Extract specific runner stats from the results DataFrame."""
+    # Get runner's row
+    runner_row = df[df['parkrun_id'] == str(runner_id)].iloc[0]
+    
+    # Get total counts
+    total_runners = len(df)
+    male_runners = len(df[df['gender'] == 'Male'])
+    female_runners = len(df[df['gender'] == 'Female'])
+    
+    # Get gender position
+    gender = runner_row['gender']
+    gender_position = len(df[(df['gender'] == gender) & 
+                           (df['position'].astype(int) <= int(runner_row['position']))])
+    
+    # Get age category stats
+    age = runner_row['age']
+    age_category_runners = len(df[(df['gender'] == gender) & (df['age'] == age)])
+    age_category_position = len(df[(df['gender'] == gender) & 
+                                 (df['age'] == age) & 
+                                 (df['position'].astype(int) <= int(runner_row['position']))])
 
     return {
         'total_runners': total_runners,
         'male_runners': male_runners,
         'female_runners': female_runners,
-        'position': position,
+        'position': runner_row['position'],
         'gender_position': gender_position,
-        'is_pb': is_pb,
-        'time': time,
-        'age_grade_score': age_grade
+        'is_pb': runner_row['is_pb'],
+        'time': runner_row['time'],
+        'age_grade_score': runner_row['age_grade'],
+        'total_runs': runner_row['total_runs'],
+        'location': runner_row['location'],
+        'gender': runner_row['gender'],
+        'age_category_runners': age_category_runners,
+        'age_category_position': age_category_position
     }
 
 def get_title_and_description(credential, runner_id):
@@ -313,18 +345,25 @@ def get_title_and_description(credential, runner_id):
     if recent_parkrun_date == get_current_time().date():
         if data['recent_parkrun_link']:
             file_name = fetch_and_store_parkrun_results(credential, data['recent_parkrun_link'], runner_id)
-            parkrun_stats = extract_parkrun_stats(credential, file_name, runner_id, data['gender'])
+            soup = parse_html_file(credential, file_name)
+            
+            # Get full results DataFrame
+            results_df = parse_parkrun_results(soup)
+            
+            # Get specific runner stats
+            parkrun_stats = get_runner_stats(results_df, runner_id)
 
-            title = f"Parkrun #{data['total_parkruns']} ({data['recent_parkrun_location']})"
+            title = f"Parkrun #{parkrun_stats['total_runs']} ({data['recent_parkrun_location']})"
             
             description = f"""🕒 Official time: {parkrun_stats['time']}
 🏁 Overall position: {parkrun_stats['position']}/{parkrun_stats['total_runners']}
-🚹 Gender position: {parkrun_stats['gender_position']}/{parkrun_stats['male_runners'] if data['gender'] == 'Male' else parkrun_stats['female_runners']}
-🎯 Age grade: {parkrun_stats['age_grade_score']}
+🚹 Gender position: {parkrun_stats['gender_position']}/{parkrun_stats['male_runners'] if parkrun_stats['gender'] == 'Male' else parkrun_stats['female_runners']}
+👨‍👨‍👦 Age category position: {parkrun_stats['age_category_position']}/{parkrun_stats['age_category_runners']}
+🎯 Age grade: {parkrun_stats['age_grade_score']}%
 🃏 Automated statistics powered by Isaac"""
             
             if parkrun_stats['is_pb']:
-                description = description.replace(f"🕒 Official time: {data['time']}", f"🕒 Official time: {data['time']} | Course PB 🚨")
+                description = description.replace(f"🕒 Official time: {parkrun_stats['time']}", f"🕒 Official time: {parkrun_stats['time']} | Course PB 🚨")
 
             log_completion(credential, runner_id)
 

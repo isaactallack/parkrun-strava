@@ -37,13 +37,6 @@ def get_current_time():
 def load_configuration(config_file='config.json'):
     with open(os.path.join(os.path.dirname(__file__), config_file), 'r') as file:
         config = json.load(file)
-    
-    # Get min_page_size_kb, defaulting to 5 if not found
-    min_page_size_kb = config.get('min_page_size_kb', 5)
-    if 'min_page_size_kb' not in config:
-        logging.warning(" 'min_page_size_kb' not found in config.json, using default value of 5KB.")
-    config['min_page_size_kb'] = min_page_size_kb  # Ensure it's in the config dict being returned
-    
     return config
 
 def is_time_to_run(config):
@@ -110,16 +103,6 @@ def fetch_webpage(url):
         raise
 
 def store_page(credential, html_content, file_name):
-    config = load_configuration()
-    min_page_size_kb = config.get('min_page_size_kb', 5) # Default to 5KB if somehow still missing
-    min_page_size_bytes = min_page_size_kb * 1024
-
-    content_size_bytes = len(html_content.encode('utf-8'))
-
-    if content_size_bytes < min_page_size_bytes:
-        logging.warning(f"Page {file_name} content size is {content_size_bytes} bytes, which is less than the minimum threshold of {min_page_size_kb}KB. Not storing.")
-        return
-
     blob_service_client = BlobServiceClient(account_url=os.getenv('AZURE_STORAGE_ACCOUNT_URL'), credential=credential)
     container_client = blob_service_client.get_container_client(os.getenv('CONTAINER'))
 

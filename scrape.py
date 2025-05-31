@@ -116,7 +116,8 @@ def store_page(credential, html_content, file_name):
 
     content_size_bytes = len(html_content.encode('utf-8'))
 
-    if content_size_bytes < min_page_size_bytes:
+    # Only check size for parkrun pages
+    if content_size_bytes < min_page_size_bytes and 'parkruns' in file_name:
         logging.warning(f"Page {file_name} content size is {content_size_bytes} bytes, which is less than the minimum threshold of {min_page_size_kb}KB. Not storing.")
         return
 

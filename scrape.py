@@ -147,9 +147,29 @@ def fetch_and_store_parkrun_results(credential, recent_parkrun_link, runner_id):
         blob_client.get_blob_properties()
         logging.info(f"File {file_name} already exists in blob storage.")
     except ResourceNotFoundError:
-        # Fetch the recent parkrun results page
-        recent_html_content = fetch_webpage(recent_parkrun_link)
+        config = load_configuration()
+        min_page_size_kb = config.get('min_page_size_kb', 5)
+        min_page_size_bytes = min_page_size_kb * 1024
+        
+        recent_html_content = ""
+        
+        for i in range(3): # Up to 3 attempts
+            # Fetch the recent parkrun results page
+            recent_html_content = fetch_webpage(recent_parkrun_link)
+            content_size_bytes = len(recent_html_content.encode('utf-8'))
+
+            if content_size_bytes >= min_page_size_bytes:
+                logging.info(f"Page {file_name} content size is {content_size_bytes} bytes. Storing.")
+                break # Exit loop on success
+            else:
+                logging.warning(f"Attempt {i+1}/3: Page content for {file_name} is too small ({content_size_bytes} bytes).")
+                if i < 2: # If not the last attempt
+                    wait_time = random.randint(5, 15)
+                    logging.info(f"Waiting for {wait_time} seconds before retrying.")
+                    time.sleep(wait_time)
+
         # Store the HTML content in Azure Blob Storage
+        # The store_page function will perform the final check and decide whether to save.
         store_page(credential, recent_html_content, file_name)
 
     return file_name  # Return the blob name instead of the path

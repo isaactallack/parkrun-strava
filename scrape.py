@@ -95,29 +95,47 @@ def log_completion(credential, runner_id):
 
     upload_blob_content(blob_client, logs)
 
-def fetch_webpage(url):
+def fetch_webpage(url, retries=3, min_page_size_kb=5):
     api_key = os.getenv("SCRAPEDO_API_KEY")
-
-    url = f"http://api.scrape.do?token={api_key}&url={url}&super=True"
+    scrape_url = f"http://api.scrape.do?token={api_key}&url={url}&super=True"
+    min_page_size_bytes = min_page_size_kb * 1024
     
-    try:
-        r = requests.get(url, timeout=70)
-        r.raise_for_status()  # Raise an HTTPError for bad responses
-        logging.info(r.status_code)
-        return r.text
-    except Exception as err:
-        logging.info(f"Other error occurred: {err}")
-        raise
+    html_content = ""
+    for i in range(retries):
+        try:
+            r = requests.get(scrape_url, timeout=70)
+            r.raise_for_status()
+            logging.info(f"Request to {url} returned status {r.status_code}")
+            html_content = r.text
+            
+            content_size_bytes = len(html_content.encode('utf-8'))
+            
+            if min_page_size_bytes > 0 and content_size_bytes < min_page_size_bytes:
+                logging.warning(f"Attempt {i+1}/{retries}: Page content from {url} is too small ({content_size_bytes} bytes).")
+                if i < retries - 1:
+                    wait_time = random.randint(5, 15)
+                    logging.info(f"Waiting for {wait_time} seconds before retrying.")
+                    time.sleep(wait_time)
+                continue
+            
+            return html_content
+        except Exception as err:
+            logging.warning(f"Attempt {i+1}/{retries}: An error occurred for {url}: {err}")
+            if i < retries - 1:
+                wait_time = random.randint(5, 15)
+                logging.info(f"Waiting for {wait_time} seconds before retrying.")
+                time.sleep(wait_time)
+
+    return html_content
 
 def store_page(credential, html_content, file_name):
     config = load_configuration()
-    min_page_size_kb = config.get('min_page_size_kb', 5) # Default to 5KB if somehow still missing
+    min_page_size_kb = config.get('min_page_size_kb', 5)
     min_page_size_bytes = min_page_size_kb * 1024
 
     content_size_bytes = len(html_content.encode('utf-8'))
 
-    # Only check size for parkrun pages
-    if content_size_bytes < min_page_size_bytes and 'parkruns' in file_name:
+    if ('parkruns' in file_name or 'runner' in file_name) and content_size_bytes < min_page_size_bytes:
         logging.warning(f"Page {file_name} content size is {content_size_bytes} bytes, which is less than the minimum threshold of {min_page_size_kb}KB. Not storing.")
         return
 
@@ -138,7 +156,6 @@ def fetch_and_store_parkrun_results(credential, recent_parkrun_link, runner_id):
 
     file_name = f'parkruns_{location}_{number}.html'
 
-    # Check if the file already exists in blob storage
     blob_service_client = BlobServiceClient(account_url=os.getenv('AZURE_STORAGE_ACCOUNT_URL'), credential=credential)
     container_client = blob_service_client.get_container_client(os.getenv('CONTAINER'))
     blob_client = container_client.get_blob_client(file_name)
@@ -147,12 +164,14 @@ def fetch_and_store_parkrun_results(credential, recent_parkrun_link, runner_id):
         blob_client.get_blob_properties()
         logging.info(f"File {file_name} already exists in blob storage.")
     except ResourceNotFoundError:
-        # Fetch the recent parkrun results page
-        recent_html_content = fetch_webpage(recent_parkrun_link)
-        # Store the HTML content in Azure Blob Storage
+        config = load_configuration()
+        min_page_size_kb = config.get('min_page_size_kb', 5)
+        
+        recent_html_content = fetch_webpage(recent_parkrun_link, retries=3, min_page_size_kb=min_page_size_kb)
+        
         store_page(credential, recent_html_content, file_name)
 
-    return file_name  # Return the blob name instead of the path
+    return file_name
 
 def parse_html_file(credential, file_name):
     blob_service_client = BlobServiceClient(account_url=os.getenv('AZURE_STORAGE_ACCOUNT_URL'), credential=credential)

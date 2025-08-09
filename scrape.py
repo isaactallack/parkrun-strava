@@ -133,13 +133,30 @@ def fetch_and_store_parkrun_results(credential, recent_parkrun_link, runner_id):
     blob_client = container_client.get_blob_client(file_name)
 
     try:
-        blob_client.get_blob_properties()
-        logging.info(f"File {file_name} already exists in blob storage.")
+        blob_properties = blob_client.get_blob_properties()
+        if blob_properties.size >= 5000:
+            logging.info(f"File {file_name} already exists in blob storage and is large enough.")
+            return file_name
+        else:
+            logging.info(f"File {file_name} exists but is too small ({blob_properties.size} bytes). Refetching.")
     except ResourceNotFoundError:
-        recent_html_content = fetch_webpage(recent_parkrun_link)
-        store_page(credential, recent_html_content, file_name)
+        logging.info(f"File {file_name} not found in blob storage. Fetching.")
 
-    return file_name
+    for attempt in range(5):
+        logging.info(f"Fetching attempt {attempt + 1} for {recent_parkrun_link}")
+        recent_html_content = fetch_webpage(recent_parkrun_link)
+        
+        if len(recent_html_content.encode('utf-8')) >= 5000:
+            store_page(credential, recent_html_content, file_name)
+            logging.info(f"Successfully fetched and stored {file_name}.")
+            return file_name
+        else:
+            logging.warning(f"Attempt {attempt + 1} failed: file size is less than 5KB.")
+            if attempt < 4:
+                time.sleep(5)
+
+    logging.error(f"Failed to fetch a sufficiently large file for {file_name} after 5 attempts.")
+    return None
 
 def parse_html_file(credential, file_name):
     blob_service_client = BlobServiceClient(account_url=os.getenv('AZURE_STORAGE_ACCOUNT_URL'), credential=credential)
@@ -350,30 +367,34 @@ def get_title_and_description(credential, runner_id):
     if recent_parkrun_date == get_current_time().date():
         if data['recent_parkrun_link']:
             file_name = fetch_and_store_parkrun_results(credential, data['recent_parkrun_link'], runner_id)
-            soup = parse_html_file(credential, file_name)
-            
-            # Get full results DataFrame
-            results_df = parse_parkrun_results(soup)
-            
-            # Get specific runner stats
-            parkrun_stats = get_runner_stats(results_df, runner_id)
+            if file_name:
+                soup = parse_html_file(credential, file_name)
+                
+                # Get full results DataFrame
+                results_df = parse_parkrun_results(soup)
+                
+                # Get specific runner stats
+                parkrun_stats = get_runner_stats(results_df, runner_id)
 
-            title = f"Parkrun #{parkrun_stats['total_runs']} ({data['recent_parkrun_location']})"
-            
-            description = f"""
+                title = f"Parkrun #{parkrun_stats['total_runs']} ({data['recent_parkrun_location']})"
+                
+                description = f"""
 🕒 Official time: {parkrun_stats['time']}
 🏁 Overall position: {parkrun_stats['position']}/{parkrun_stats['total_runners']}
 🚹 Gender position: {parkrun_stats['gender_position']}/{parkrun_stats['male_runners'] if parkrun_stats['gender'] == 'Male' else parkrun_stats['female_runners']}
 👨‍👨‍👦 Age category position: {parkrun_stats['age_category_position']}/{parkrun_stats['age_category_runners']}
 🎯 Age grade: {parkrun_stats['age_grade_score']}%
 🃏 Automated statistics powered by Isaac"""
-            
-            if parkrun_stats['is_pb']:
-                description = description.replace(f"🕒 Official time: {parkrun_stats['time']}", f"🕒 Official time: {parkrun_stats['time']} | Course PB 🚨")
+                
+                if parkrun_stats['is_pb']:
+                    description = description.replace(f"🕒 Official time: {parkrun_stats['time']}", f"🕒 Official time: {parkrun_stats['time']} | Course PB 🚨")
 
-            log_completion(credential, runner_id)
+                log_completion(credential, runner_id)
 
-            return title, description
+                return title, description
+            else:
+                logging.info(f"Could not retrieve parkrun results for runner {runner_id}")
+                return None, None
 
     else:
         logging.info("The most recent parkrun did not occur today. Skipping additional data fetch.")

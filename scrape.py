@@ -96,17 +96,24 @@ def log_completion(credential, runner_id):
     upload_blob_content(blob_client, logs)
 
 def fetch_webpage(url, retries=3, min_page_size_kb=5):
-    api_key = os.getenv("SCRAPEDO_API_KEY")
-    scrape_url = f"http://api.scrape.do?token={api_key}&url={url}&super=True"
     min_page_size_bytes = min_page_size_kb * 1024
     
     html_content = ""
     for i in range(retries):
         try:
-            r = requests.get(scrape_url, timeout=70)
-            r.raise_for_status()
-            logging.info(f"Request to {url} returned status {r.status_code}")
-            html_content = r.text
+            api_response = requests.post(
+                "https://api.zyte.com/v1/extract",
+                auth=(os.getenv("ZYTE_API_KEY"), ""),
+                json={
+                    "url": url,
+                    "browserHtml": True,
+                    "javascript": True,
+                },
+                timeout=70
+            )
+            api_response.raise_for_status()
+            logging.info(f"Request to {url} returned status {api_response.status_code}")
+            html_content = api_response.json()["browserHtml"]
             
             content_size_bytes = len(html_content.encode('utf-8'))
             

@@ -38,12 +38,6 @@ def load_configuration(config_file='config.json'):
     with open(os.path.join(os.path.dirname(__file__), config_file), 'r') as file:
         config = json.load(file)
     
-    # Get min_page_size_kb, defaulting to 5 if not found
-    min_page_size_kb = config.get('min_page_size_kb', 5)
-    if 'min_page_size_kb' not in config:
-        logging.warning(" 'min_page_size_kb' not found in config.json, using default value of 5KB.")
-    config['min_page_size_kb'] = min_page_size_kb  # Ensure it's in the config dict being returned
-    
     return config
 
 def is_time_to_run(config):
@@ -95,57 +89,28 @@ def log_completion(credential, runner_id):
 
     upload_blob_content(blob_client, logs)
 
-def fetch_webpage(url, retries=3, min_page_size_kb=5):
-    min_page_size_bytes = min_page_size_kb * 1024
-    
+def fetch_webpage(url):
     html_content = ""
-    for i in range(retries):
-        try:
-            api_response = requests.post(
-                "https://api.zyte.com/v1/extract",
-                auth=(os.getenv("ZYTE_API_KEY"), ""),
-                json={
-                    "url": url,
-                    "browserHtml": True,
-                    "javascript": True,
-                },
-                timeout=70
-            )
-            api_response.raise_for_status()
-            logging.info(f"Request to {url} returned status {api_response.status_code}")
-            html_content = api_response.json()["browserHtml"]
-            
-            content_size_bytes = len(html_content.encode('utf-8'))
-            
-            if min_page_size_bytes > 0 and content_size_bytes < min_page_size_bytes:
-                logging.warning(f"Attempt {i+1}/{retries}: Page content from {url} is too small ({content_size_bytes} bytes).")
-                if i < retries - 1:
-                    wait_time = random.randint(5, 15)
-                    logging.info(f"Waiting for {wait_time} seconds before retrying.")
-                    time.sleep(wait_time)
-                continue
-            
-            return html_content
-        except Exception as err:
-            logging.warning(f"Attempt {i+1}/{retries}: An error occurred for {url}: {err}")
-            if i < retries - 1:
-                wait_time = random.randint(5, 15)
-                logging.info(f"Waiting for {wait_time} seconds before retrying.")
-                time.sleep(wait_time)
+    try:
+        api_response = requests.post(
+            "https://api.zyte.com/v1/extract",
+            auth=(os.getenv("ZYTE_API_KEY"), ""),
+            json={
+                "url": url,
+                "browserHtml": True,
+                "javascript": True,
+            },
+            timeout=70
+        )
+        api_response.raise_for_status()
+        logging.info(f"Request to {url} returned status {api_response.status_code}")
+        html_content = api_response.json()["browserHtml"]
+    except Exception as err:
+        logging.warning(f"An error occurred for {url}: {err}")
 
     return html_content
 
 def store_page(credential, html_content, file_name):
-    config = load_configuration()
-    min_page_size_kb = config.get('min_page_size_kb', 5)
-    min_page_size_bytes = min_page_size_kb * 1024
-
-    content_size_bytes = len(html_content.encode('utf-8'))
-
-    if ('parkruns' in file_name or 'runner' in file_name) and content_size_bytes < min_page_size_bytes:
-        logging.warning(f"Page {file_name} content size is {content_size_bytes} bytes, which is less than the minimum threshold of {min_page_size_kb}KB. Not storing.")
-        return
-
     blob_service_client = BlobServiceClient(account_url=os.getenv('AZURE_STORAGE_ACCOUNT_URL'), credential=credential)
     container_client = blob_service_client.get_container_client(os.getenv('CONTAINER'))
 
@@ -171,11 +136,7 @@ def fetch_and_store_parkrun_results(credential, recent_parkrun_link, runner_id):
         blob_client.get_blob_properties()
         logging.info(f"File {file_name} already exists in blob storage.")
     except ResourceNotFoundError:
-        config = load_configuration()
-        min_page_size_kb = config.get('min_page_size_kb', 5)
-        
-        recent_html_content = fetch_webpage(recent_parkrun_link, retries=3, min_page_size_kb=min_page_size_kb)
-        
+        recent_html_content = fetch_webpage(recent_parkrun_link)
         store_page(credential, recent_html_content, file_name)
 
     return file_name
@@ -399,7 +360,8 @@ def get_title_and_description(credential, runner_id):
 
             title = f"Parkrun #{parkrun_stats['total_runs']} ({data['recent_parkrun_location']})"
             
-            description = f"""🕒 Official time: {parkrun_stats['time']}
+            description = f"""
+🕒 Official time: {parkrun_stats['time']}
 🏁 Overall position: {parkrun_stats['position']}/{parkrun_stats['total_runners']}
 🚹 Gender position: {parkrun_stats['gender_position']}/{parkrun_stats['male_runners'] if parkrun_stats['gender'] == 'Male' else parkrun_stats['female_runners']}
 👨‍👨‍👦 Age category position: {parkrun_stats['age_category_position']}/{parkrun_stats['age_category_runners']}

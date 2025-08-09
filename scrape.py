@@ -341,9 +341,43 @@ def get_runner_stats(df, runner_id):
         'age_category_position': age_category_position
     }
 
-def get_title_and_description(credential, runner_id):
-    url = f"https://www.parkrun.org.uk/parkrunner/{runner_id}/"
 
+def fetch_and_store_runner_page(credential, runner_id):
+    url = f"https://www.parkrun.org.uk/parkrunner/{runner_id}/"
+    file_name = f'runner_{runner_id}.html'
+
+    blob_service_client = BlobServiceClient(account_url=os.getenv('AZURE_STORAGE_ACCOUNT_URL'), credential=credential)
+    container_client = blob_service_client.get_container_client(os.getenv('CONTAINER'))
+    blob_client = container_client.get_blob_client(file_name)
+
+    try:
+        blob_properties = blob_client.get_blob_properties()
+        if blob_properties.size >= 5000:
+            logging.info(f"File {file_name} already exists in blob storage and is large enough.")
+            return file_name
+        else:
+            logging.info(f"File {file_name} exists but is too small ({blob_properties.size} bytes). Refetching.")
+    except ResourceNotFoundError:
+        logging.info(f"File {file_name} not found in blob storage. Fetching.")
+
+    for attempt in range(5):
+        logging.info(f"Fetching attempt {attempt + 1} for {url}")
+        html_content = fetch_webpage(url)
+        
+        if len(html_content.encode('utf-8')) >= 5000:
+            store_page(credential, html_content, file_name)
+            logging.info(f"Successfully fetched and stored {file_name}.")
+            return file_name
+        else:
+            logging.warning(f"Attempt {attempt + 1} failed: file size is less than 5KB.")
+            if attempt < 4:
+                time.sleep(5)
+
+    logging.error(f"Failed to fetch a sufficiently large file for {file_name} after 5 attempts.")
+    return None
+
+
+def get_title_and_description(credential, runner_id):
     config = load_configuration()
 
     if not is_time_to_run(config):
@@ -354,10 +388,10 @@ def get_title_and_description(credential, runner_id):
         logging.info(f"Processing already completed for runner ID: {runner_id} today.")
         return None, None
     
-    file_name = f'runner_{runner_id}.html'
-    # Fetch runner profile and store it in Azure Blob Storage
-    html_content = fetch_webpage(url)
-    store_page(credential, html_content, file_name)
+    file_name = fetch_and_store_runner_page(credential, runner_id)
+    if not file_name:
+        logging.error(f"Failed to fetch runner page for {runner_id}")
+        return None, None
     
     soup = parse_html_file(credential, file_name)
     data = extract_runner_stats(soup)

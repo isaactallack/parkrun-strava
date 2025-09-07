@@ -350,16 +350,6 @@ def fetch_and_store_runner_page(credential, runner_id):
     container_client = blob_service_client.get_container_client(os.getenv('CONTAINER'))
     blob_client = container_client.get_blob_client(file_name)
 
-    try:
-        blob_properties = blob_client.get_blob_properties()
-        if blob_properties.size >= 5000:
-            logging.info(f"File {file_name} already exists in blob storage and is large enough.")
-            return file_name
-        else:
-            logging.info(f"File {file_name} exists but is too small ({blob_properties.size} bytes). Refetching.")
-    except ResourceNotFoundError:
-        logging.info(f"File {file_name} not found in blob storage. Fetching.")
-
     for attempt in range(5):
         logging.info(f"Fetching attempt {attempt + 1} for {url}")
         html_content = fetch_webpage(url)

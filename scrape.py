@@ -402,8 +402,7 @@ def get_title_and_description(credential, runner_id):
 
                 title = f"Parkrun #{parkrun_stats['total_runs']} ({data['recent_parkrun_location']})"
                 
-                description = f"""
-🕒 Official time: {parkrun_stats['time']}
+                description = f"""🕒 Official time: {parkrun_stats['time']}
 🏁 Overall position: {parkrun_stats['position']}/{parkrun_stats['total_runners']}
 🚹 Gender position: {parkrun_stats['gender_position']}/{parkrun_stats['male_runners'] if parkrun_stats['gender'] == 'Male' else parkrun_stats['female_runners']}
 👨‍👨‍👦 Age category position: {parkrun_stats['age_category_position']}/{parkrun_stats['age_category_runners']}

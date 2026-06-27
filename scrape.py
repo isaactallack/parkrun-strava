@@ -260,7 +260,7 @@ def parse_parkrun_results(soup):
             id_match = re.search(r'parkrunner/(\d+)', name_link['href'])
             parkrun_id = id_match.group(1) if id_match else ''
 
-        gender = row.get('data-gender', '')
+        gender = row.get('data-gender', '').title()
         age_group = row.get('data-agegroup', '')
         # More defensive time extraction
         time_cell = row.find('td', class_='Results-table-td--time')
@@ -273,7 +273,7 @@ def parse_parkrun_results(soup):
         # Check for PB using the presence of Results-table-td--pb class
         is_pb = 'Results-table-td--pb' in time_cell.get('class', []) if time_cell else False
         
-        age_grade = row.get('data-agegrade', '')
+        age_grade = row.get('data-agegrade', '').rstrip('%')
         club = row.get('data-club', '')
 
         # Extract age from age group

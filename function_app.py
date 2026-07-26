@@ -4,9 +4,11 @@ from cryptography.fernet import Fernet
 import time
 import os
 import json
+from datetime import datetime
 import strava
 import scrape
 import re
+import pytz
 from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient
 from azure.identity import DefaultAzureCredential
 
@@ -134,8 +136,28 @@ def main():
 
             activities = strava.get_activities(access_token)
 
-            if len(activities) == 1:
+            if len(activities) == 0:
+                print(f"No Strava activities found for runner {runner_id} in the time/distance window.")
+
+            elif len(activities) == 1:
                 activity_id = activities[0]['id']
+                activity_description = strava.get_activity(access_token, activity_id)['description']
+
+                if activity_description:
+                    new_description = f"""{activity_description}
+
+{description}"""
+                else:
+                    new_description = description
+
+                strava.update_activity(access_token, activity_id, title, new_description)
+
+            else:
+                print(f"Found {len(activities)} candidates for runner {runner_id}, picking closest to 9am.")
+                best = min(activities, key=lambda a: abs(
+                    datetime.strptime(a['start_date'], "%Y-%m-%dT%H:%M:%S%z").astimezone(pytz.timezone('Europe/London')).hour - 9
+                ))
+                activity_id = best['id']
                 activity_description = strava.get_activity(access_token, activity_id)['description']
 
                 if activity_description:
